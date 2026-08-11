@@ -184,6 +184,7 @@
       <button class="btn on" id="bHalo">Las 4 sierras</button>
       <button class="btn on" id="bTrazo" style="display:none">Trazo</button>
       <button class="btn" id="bVolc" style="display:none">Volcanes</button>
+      <button class="btn on" id="bEdif" style="display:none">Edificios</button>
       <button class="btn" id="bAgua" style="display:none">El agua</button>
       <button class="btn" id="bAcu" style="display:none">Acuíferos</button>
       <button class="btn" id="bSuelo" style="display:none">Suelos</button>
@@ -1073,7 +1074,9 @@ function focusSierra(id){
   SIERRAS.forEach(function(S,i){
     const m=sierraMesh[i]; if(!m)return;
     const on=(!id||id===S.id);
-    m.material.opacity=on?1:0.22;
+    /* las no elegidas se atenúan, pero deben seguir leyéndose: a 0.22 desaparecían
+       contra el relieve y parecía que la capa mostraba una sola sierra */
+    m.material.opacity=on?1:0.5;
     m.material.emissiveIntensity=(id===S.id)?0.45:0.16;
   });
 }
@@ -1086,6 +1089,52 @@ CITIES.forEach(function(c){
   d.position.set(c.x,y+0.3,c.z); reg(d,'ciudades',gTerr);
   pinMarker(gTerr,'ciudades',c.x,y,c.z,'#e2e8f0',c.n+" · "+c.pob,c.H,'terr',3);
 });
+/* --- mancha urbana con volumen: un caserío de cajas sobre el relieve ---
+   las alturas son esquemáticas, igual que el resto del modelo: un edificio real
+   de 50 m mediría 0.3 unidades (≈1 px) y no se vería. Se exageran para que la
+   ciudad se lea como corteza construida y no como una mancha gris plana. */
+const gEdif=new THREE.Group(); gTerr.add(gEdif);
+(function(){
+  const rnd=(i,s)=>{const v=Math.sin(i*127.1+s*311.7)*43758.5453;return v-Math.floor(v);};
+  const dummy=new THREE.Object3D(), col=new THREE.Color(),
+        bajo=new THREE.Color('#6f7885').convertSRGBToLinear(),
+        alto=new THREE.Color('#d3dbe4').convertSRGBToLinear();
+  const M=[],C=[];
+  let n=0;
+  CITIES.forEach(function(c){
+    const step=c.r>12?0.95:0.62;                 // el DF es enorme: paso más grande o son miles
+    const esc=c.r>12?1:0.62;                     // Toluca y Cuernavaca no tienen la altura del DF
+    for(let gx=-c.r;gx<=c.r;gx+=step){
+      for(let gz=-c.r;gz<=c.r;gz+=step){
+        const id=++n;
+        const x=c.x+gx+(rnd(id,1)-0.5)*step*0.7;
+        const z=c.z+gz+(rnd(id,2)-0.5)*step*0.7;
+        const d=Math.hypot(x-c.x,z-c.z); if(d>c.r) continue;
+        const h=elev(x,z);
+        const u=urban(x,z,h); if(u<0.42) continue;      // solo donde el terreno ya es gris
+        if(rnd(id,3)>0.18+0.72*u) continue;             // huecos: no es una retícula maciza
+        const dens=u*(1-0.5*d/c.r);                     // el centro es más denso y más alto
+        const alt=esc*(0.26+1.25*dens*dens)*(0.40+0.55*rnd(id,4))
+                  *(rnd(id,5)>0.985?1.65:1);            // alguna torre suelta rompe la silueta
+        const w=step*(0.46+0.34*rnd(id,6)), p=step*(0.46+0.34*rnd(id,7));
+        dummy.position.set(x,yOf(h)-0.06+alt/2,z);
+        dummy.rotation.set(0,(rnd(id,8)-0.5)*0.55,0);
+        dummy.scale.set(w,alt,p);
+        dummy.updateMatrix();
+        M.push(dummy.matrix.clone());
+        col.copy(bajo).lerp(alto,clamp(alt/1.4,0,1)*0.7+rnd(id,9)*0.3);
+        C.push(col.clone());
+      }
+    }
+  });
+  const im=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),
+      mat('#ffffff',{rough:.72,emi:.05}),M.length);
+  M.forEach(function(m,i){ im.setMatrixAt(i,m); if(im.setColorAt) im.setColorAt(i,C[i]); });
+  im.instanceMatrix.needsUpdate=true;
+  if(im.instanceColor) im.instanceColor.needsUpdate=true;
+  im.userData={key:'ciudades',nofit:true};        // no debe estirar el encuadre
+  gEdif.add(im); clickables.push(im);
+})();
 /* --- referencia externa: lo que NO es Bosque de Agua --- */
 (function(){
   const y=yOf(elev(-44,8));
@@ -1972,7 +2021,7 @@ labelDefs.forEach(function(L){
   if(L.root===gCult)  L.lay='cult';
   if(L.root===halo)   L.lay='sierras';
 });
-const LAYG={volc:gVolc,agua:gAguaT,acu:gAcuif,trazo:gTrazo,suelo:gSuelo,cult:gCult,sierras:halo};
+const LAYG={volc:gVolc,agua:gAguaT,acu:gAcuif,trazo:gTrazo,suelo:gSuelo,cult:gCult,sierras:halo,edif:gEdif};
 const NUDGE=[0,-17,-34,17,34,-51,51,-68,68,-85,85,-102,102];
 const LABELS=labelDefs.slice().sort((a,b)=>((a.pri===undefined?5:a.pri)-(b.pri===undefined?5:b.pri)));
 
@@ -2116,7 +2165,7 @@ function applyView(){
   document.getElementById('gYear').style.display=view==='riesgo'?'':'none';
   document.getElementById('bHalo').style.display=view==='terr'?'':'none';
   document.getElementById('bVolc').style.display=view==='terr'?'':'none';
-  ['bTrazo','bAgua','bAcu','bSuelo','bCult'].forEach(function(b){
+  ['bTrazo','bAgua','bAcu','bSuelo','bCult','bEdif'].forEach(function(b){
     document.getElementById(b).style.display=view==='terr'?'':'none';});
   document.getElementById('bFauna').style.display=view==='eco'?'':'none';
   document.getElementById('bFlora').style.display=view==='eco'?'':'none';
@@ -2147,7 +2196,7 @@ function syncLayerLabels(id){
   labelDefs.forEach(function(L){
     if(L.lay===id) L.el.dataset.off=(LAYG[id].visible&&view==='terr')?'':'1';});
 }
-[['bTrazo','trazo'],['bAgua','agua'],['bAcu','acu'],['bSuelo','suelo'],['bCult','cult']].forEach(function(P){
+[['bTrazo','trazo'],['bAgua','agua'],['bAcu','acu'],['bSuelo','suelo'],['bCult','cult'],['bEdif','edif']].forEach(function(P){
   document.getElementById(P[0]).addEventListener('click',function(){
     const g=LAYG[P[1]]; g.visible=!g.visible; this.classList.toggle('on',g.visible);
     if(P[1]==='suelo'){                       // suelos y sierras se estorban: son excluyentes
@@ -2179,6 +2228,7 @@ document.getElementById('bReset').addEventListener('click',function(){
 document.getElementById('year').addEventListener('input',function(){year=+this.value;paintRiesgo(year);});
 document.getElementById('bHalo').addEventListener('click',function(){
   halo.visible=!halo.visible;this.classList.toggle('on',halo.visible);
+  focusSierra(null);                         // la capa siempre vuelve con las cuatro completas
   syncLayerLabels('sierras');
   if(halo.visible&&gSuelo.visible){          // apagar suelos para no encimar colores
     ['suelo'].forEach(k=>{LAYG[k].visible=false;});
@@ -2293,7 +2343,9 @@ function flyTo(tx,ty,tz,rad,th,ph,ms){
 function flySierra(id){
   const S=SIERRAS.filter(s=>s.id===id)[0]; if(!S||view!=='terr')return;
   const y=yOf(elev(S.px,S.pz));
-  flyTo(S.px,y+3,S.pz,72,Math.atan2(S.px-6,S.pz+34),0.92);
+  /* el radio va relativo al encuadre, no fijo: en celular DEF_R es ~3× el de
+     escritorio y un 72 fijo se metía tanto que tapaba las otras tres sierras */
+  flyTo(S.px,y+3,S.pz,Math.max(48,DEF_R*0.46),Math.atan2(S.px-6,S.pz+34),0.92);
 }
 function tick(){
   requestAnimationFrame(tick);
