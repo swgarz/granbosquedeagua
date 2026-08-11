@@ -117,7 +117,12 @@
       left:10px;justify-content:center;gap:4px}
     #legend .lg{font-size:10.5px;padding:5px 8px}
     #legend .lg small{display:none}
-    .lab.big{font-size:11px;padding:4px 9px}
+    /* la franja libre del celular son ~260 px de alto: las etiquetas se achican
+       y se recortan para que quepan varias, en vez de descartarse por anchas */
+    .lab{font-size:9.5px;padding:3px 7px;border-radius:7px;
+      max-width:46vw;overflow:hidden;text-overflow:ellipsis}
+    .lab.dim{font-size:9px}
+    .lab.big{font-size:10.5px;padding:4px 8px;border-radius:8px;max-width:54vw}
     #tools{top:52px;bottom:auto;left:12px;right:12px;width:auto;max-width:none;gap:7px}
     #tools .group{padding:7px 9px}
     #tools .lbl{display:none}
@@ -144,6 +149,10 @@
     #legend{top:8px;right:308px;left:auto;bottom:auto;flex-direction:row;flex-wrap:wrap;
       max-width:300px;justify-content:flex-end;gap:4px}
     #legend .lg{font-size:10px;padding:4px 7px} #legend .lg small{display:none}
+    .lab{font-size:9.5px;padding:3px 7px;border-radius:7px;
+      max-width:34vw;overflow:hidden;text-overflow:ellipsis}
+    .lab.dim{font-size:9px}
+    .lab.big{font-size:10.5px;padding:4px 8px;border-radius:8px;max-width:40vw}
     #hint{display:none} #ptitle{font-size:16px} .head{padding:10px 14px}
   }
 </style>
@@ -2009,9 +2018,18 @@ labelDefs.forEach(function(L){
   if(L.key) el.addEventListener('click',e=>{e.stopPropagation();select(L.key);});
   labelLayer.appendChild(el); L.el=el;
 });
-/* medición real del ancho de cada etiqueta antes del primer cuadro:
-   si se estimaba, las etiquetas largas se solapaban */
-labelDefs.forEach(function(L){ L.el._w=L.el.offsetWidth||90; });
+/* medición real de cada etiqueta antes del primer cuadro: si se estimaba, las
+   etiquetas largas se solapaban. Hay que rehacerla en cada resize porque el
+   tamaño de letra cambia con el ancho de pantalla (y al rotar el teléfono). */
+function midePlacas(){
+  labelDefs.forEach(function(L){
+    const el=L.el, oculta=el.classList.contains('hide');
+    if(oculta) el.classList.remove('hide');
+    L.el._w=el.offsetWidth||90; L.el._h=el.offsetHeight||24;
+    if(oculta) el.classList.add('hide');
+  });
+}
+midePlacas();
 labelDefs.forEach(function(L){
   if(L.root===gVolc)  L.lay='volc';
   if(L.root===gAguaT) L.lay='agua';
@@ -2022,8 +2040,21 @@ labelDefs.forEach(function(L){
   if(L.root===halo)   L.lay='sierras';
 });
 const LAYG={volc:gVolc,agua:gAguaT,acu:gAcuif,trazo:gTrazo,suelo:gSuelo,cult:gCult,sierras:halo,edif:gEdif};
-const NUDGE=[0,-17,-34,17,34,-51,51,-68,68,-85,85,-102,102];
-const LABELS=labelDefs.slice().sort((a,b)=>((a.pri===undefined?5:a.pri)-(b.pri===undefined?5:b.pri)));
+/* el desplazamiento se prueba en abanico y se corta en ±96: más lejos la etiqueta
+   ya no se lee como perteneciente a su punto y solo tapa el relieve */
+const NUDGE=[0,-16,16,-32,32,-48,48,-64,64,-80,80,-96,96];
+const prio=L=>(L.pri===undefined?5:L.pri);
+let LABELS=labelDefs.slice().sort((a,b)=>prio(a)-prio(b));
+/* la capa que acabas de encender se coloca primero: si no, en celular las sierras
+   y el trazo ocupaban el hueco y las culturas o los volcanes no entraban nunca */
+let capaFoco=null;
+function ordenaPlacas(lay){
+  capaFoco=lay;
+  LABELS=labelDefs.slice().sort(function(a,b){
+    const fa=(a.lay&&a.lay===capaFoco)?0:1, fb=(b.lay&&b.lay===capaFoco)?0:1;
+    return fa-fb || prio(a)-prio(b);
+  });
+}
 
 /* =====================================================================
    CÁMARA
@@ -2191,6 +2222,7 @@ document.getElementById('bFlora').addEventListener('click',function(){
   labelDefs.forEach(L=>{const sp=ECOKIND[L.key];if(sp==='flora')L.el.dataset.off=(gFlora.visible&&view==='eco')?'':'1';});});
 document.getElementById('bVolc').addEventListener('click',function(){
   gVolc.visible=!gVolc.visible;this.classList.toggle('on',gVolc.visible);
+  ordenaPlacas(gVolc.visible?'volc':null);
   syncLayerLabels('volc');});
 function syncLayerLabels(id){
   labelDefs.forEach(function(L){
@@ -2199,6 +2231,7 @@ function syncLayerLabels(id){
 [['bTrazo','trazo'],['bAgua','agua'],['bAcu','acu'],['bSuelo','suelo'],['bCult','cult'],['bEdif','edif']].forEach(function(P){
   document.getElementById(P[0]).addEventListener('click',function(){
     const g=LAYG[P[1]]; g.visible=!g.visible; this.classList.toggle('on',g.visible);
+    ordenaPlacas(g.visible?P[1]:null);       // sus etiquetas pasan al frente de la cola
     if(P[1]==='suelo'){                       // suelos y sierras se estorban: son excluyentes
       gSoilMap.visible=g.visible;
       if(g.visible&&halo.visible){halo.visible=false;
@@ -2277,6 +2310,7 @@ function resize(){
   const y1=mobile?h-ph-8:(land?h-14:h-56);
   const cx=(x0+x1)/2,cy=(y0+y1)/2;
   SAFE={x0:x0-6,x1:x1+6,y0:mobile?y0-8:(land?46:52),y1:land?h-8:y1+34};
+  if(typeof midePlacas==='function') midePlacas();   // el tamaño de letra cambia con el ancho
   const fullW=2*Math.max(cx,w-cx),fullH=2*Math.max(cy,h-cy);
   camera.aspect=fullW/fullH;
   camera.setViewOffset(fullW,fullH,fullW/2-cx,fullH/2-cy,w,h);
@@ -2405,9 +2439,14 @@ function tick(){
     ['legend','tools'].forEach(function(id){            // no escribir encima de la interfaz
       const b=document.getElementById(id);
       if(!b||getComputedStyle(b).display==='none') return;   // ojo: son position:fixed,
-      const r=b.getBoundingClientRect();                     // offsetParent siempre es null
-      if(r.width<4||r.height<4) return;
-      placed.push({x:r.x+r.width/2,y:r.y+r.height/2,hw:r.width/2+4,hh:r.height/2+4});
+      /* la leyenda se bloquea chip por chip: en celular es una fila de botones y
+         tomarla como un bloque de ancho completo tapaba toda la franja de abajo */
+      const cajas=(id==='legend'&&b.children.length)?Array.prototype.slice.call(b.children):[b];
+      cajas.forEach(function(c){
+        const r=c.getBoundingClientRect();                   // offsetParent siempre es null
+        if(r.width<4||r.height<4) return;
+        placed.push({id:id,x:r.x+r.width/2,y:r.y+r.height/2,hw:r.width/2+4,hh:r.height/2+3});
+      });
     });
     LABELS.forEach(function(L){
       const el=L.el;
@@ -2417,7 +2456,7 @@ function tick(){
       if(v.z>1){el.classList.add('hide');return;}
       const x=(v.x*0.5+0.5)*W,y=(-v.y*0.5+0.5)*H;
       if(!el._w||el._w<10){const ow=el.offsetWidth;if(ow>10)el._w=ow;}
-      const hw=el._w/2+4,hh=12;
+      const hw=el._w/2+4,hh=Math.max(8,(el._h||26)/2-1);
       /* si choca, se prueba a subir/bajar la etiqueta antes de descartarla:
          el asta sigue apuntando al punto, así que un desplazamiento corto se lee bien */
       let fy=null;
